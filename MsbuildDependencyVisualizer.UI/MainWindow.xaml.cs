@@ -20,10 +20,8 @@ namespace MsbuildDependencyVisualizer.UI
     public partial class MainWindow : MetroWindow
     {
         private readonly GraphViewer _graphViewer = new GraphViewer();
-        private string _fileName;
         private readonly Dictionary<string, string> _processedFiles = new Dictionary<string, string>();
         private readonly Dictionary<string, List<string>> _dependencies = new Dictionary<string, List<string>>();
-        private Graph _graph;
 
         public MainWindow()
         {
@@ -32,10 +30,15 @@ namespace MsbuildDependencyVisualizer.UI
             _graphViewer.MouseUp += OnMouseCursorChanged;
             _graphViewer.BindToPanel(dockPanel);
 #if DEBUG
-            txtPath.Text = @"C:\Users\Administrator\Downloads\DevOps\Build\Scripts\Code\PackageRelease.proj";
+            txtPath.Text = @"C:\Test\Parent.proj";
 #endif
         }
 
+        /// <summary>
+        /// Triggered on change of mouse cursor
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private void OnMouseCursorChanged(object sender, MsaglMouseEventArgs e)
         {
             foreach (var en in _graphViewer.Entities)
@@ -85,21 +88,38 @@ namespace MsbuildDependencyVisualizer.UI
             }
         }
 
+        /// <summary>
+        /// Triggered on click of browse button
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private void OnBrowseClick(object sender, RoutedEventArgs e)
         {
-            OpenFileDialog openFileDialog = new OpenFileDialog();
-            openFileDialog.CheckFileExists = true;
-            openFileDialog.Multiselect = false;
-            openFileDialog.RestoreDirectory = true;
-            openFileDialog.Filter = "All Files (*.*)|*.*";
-            var showDialog = openFileDialog.ShowDialog();
-            if (showDialog.HasValue && showDialog.Value)
-            {
-                _fileName = openFileDialog.FileName;
-                txtPath.Text = _fileName;
-            }
+            this.ShowDialogWindow();
         }
 
+        /// <summary>
+        /// To Show Dialog window
+        /// </summary>
+        private void ShowDialogWindow()
+        {
+            var openFileDialog = new OpenFileDialog
+                       {
+                           CheckFileExists = true,
+                           Multiselect = false,
+                           RestoreDirectory = true,
+                           Filter = "All Files (*.*)|*.*"
+                       };
+            var showDialog = openFileDialog.ShowDialog();
+            if (showDialog.HasValue && showDialog.Value)
+                txtPath.Text = openFileDialog.FileName;
+        }
+
+        /// <summary>
+        /// Triggered on click of start button
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private async void OnStartClick(object sender, RoutedEventArgs e)
         {
             _processedFiles.Clear();
@@ -112,73 +132,61 @@ namespace MsbuildDependencyVisualizer.UI
             }
 
             var controller = await this.ShowProgressAsync("Please wait...", "Processing files..");
-
             try
             {
                 await TraverseProjects(txtPath.Text, true);
-                _graph = new Graph();
-
                 double i = 1.0;
+                var _graph = new Graph();
                 foreach (KeyValuePair<string, List<string>> item in _dependencies)
                 {
                     double percent = i / _dependencies.Count;
                     controller.SetProgress(percent);
-
-                    controller.SetMessage($"Processing... {item.Key}");
+                    controller.SetMessage(string.Format("Processing... {0}", item.Key));
                     await Task.Delay(50);
                     var node = _graph.AddNode(item.Key);
                     node.Attr.FillColor = Color.LightGreen;
-
                     foreach (var child in item.Value)
                     {
                         var edge = _graph.AddEdge(node.LabelText, child);
                     }
                     i += 1.0;
                 }
-
                 _graph.Attr.LayerDirection = LayerDirection.LR;
                 _graphViewer.Graph = _graph;
-
                 await controller.CloseAsync();
             }
             catch (Exception exception)
             {
-                await controller.CloseAsync();
-                await this.ShowMessageAsync("Oops! Error occurred", exception.Message);
+                //await controller.CloseAsync();
+                //await this.ShowMessageAsync("Oops! Error occurred", exception.Message);
             }
         }
 
+        /// <summary>
+        /// To show Message on click of About 
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private async void OnAboutClick(object sender, RoutedEventArgs e)
         {
             await this.ShowMessageAsync("MSBuild Dependency Visualizer", "By Utkarsh Shigihalli - CM Team");
         }
 
+        /// <summary>
+        /// To traverse the projects
+        /// </summary>
+        /// <param name="rootPath"></param>
+        /// <param name="recursive"></param>
+        /// <returns></returns>
         public async Task TraverseProjects(string rootPath, bool recursive = false)
         {
             ProjectCollection.GlobalProjectCollection.UnloadAllProjects();
-            if (_processedFiles.ContainsKey(rootPath))
-            {
-                return;
-            }
-
+            if (_processedFiles.ContainsKey(rootPath)) return;
             var fileName = Path.GetFileName(rootPath);
-            _processedFiles.Add(rootPath, fileName);
-            Project project = new Project(rootPath);
-            var nonImportedProjects = project.Imports.Where(x => !x.IsImported).ToList();
-            var importedProject = new List<string>();
-
-            foreach (var import in nonImportedProjects)
-            {
-                var importingProject = import.ImportedProject;
-                var projectPath = Path.GetFileName(importingProject.ProjectFileLocation.File);
-                importedProject.Add(projectPath);
-            }
-
+            var nonImportedProjects = this.GetNonImportedProjects(fileName, rootPath);
+            var importedProject = this.GetImportedProjects(nonImportedProjects);
             if (!_dependencies.ContainsKey(fileName))
-            {
                 _dependencies.Add(fileName, importedProject);
-            }
-
             if (recursive)
             {
                 foreach (var import in nonImportedProjects)
@@ -186,6 +194,36 @@ namespace MsbuildDependencyVisualizer.UI
                     await TraverseProjects(import.ImportedProject.ProjectFileLocation.File, recursive);
                 }
             }
+        }
+
+        /// <summary>
+        /// To get non-imported projects
+        /// </summary>
+        /// <param name="fileName"></param>
+        /// <param name="rootPath"></param>
+        /// <returns></returns>
+        private List<ResolvedImport> GetNonImportedProjects(string fileName, string rootPath)
+        {
+            _processedFiles.Add(rootPath, fileName);
+            var project = new Project(rootPath);
+            return project.Imports.Where(x => !x.IsImported).ToList();
+        }
+
+        /// <summary>
+        /// To get imported projects
+        /// </summary>
+        /// <param name="nonImportedProjects"></param>
+        /// <returns></returns>
+        private List<string> GetImportedProjects(List<ResolvedImport> nonImportedProjects)
+        {
+            var importedProjects = new List<string>();
+            nonImportedProjects.ForEach(project =>
+            {
+                var importingProject = project.ImportedProject;
+                var projectPath = Path.GetFileName(importingProject.ProjectFileLocation.File);
+                importedProjects.Add(projectPath);
+            });
+            return importedProjects;
         }
     }
 }
